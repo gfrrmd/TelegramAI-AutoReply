@@ -5,21 +5,23 @@ from telethon import TelegramClient
 from telethon.sessions import StringSession
 from telethon.errors import PhoneCodeExpiredError, PhoneCodeInvalidError, SessionPasswordNeededError
 from config import config
-from database import Database
-
-db = Database()
 
 PHONE_STEP = 1
 CODE_STEP = 2
 PASSWORD_STEP = 3
 
+# db di-inject dari main.py setelah db.init() selesai
+_db = None
+
+
+def set_db(db_instance):
+    """Inject db instance dari main.py agar pakai pool yang sudah di-init."""
+    global _db
+    _db = db_instance
+
+
 # Temporary store selama proses login
 temp_store: dict = {}
-
-
-def register_auth_handlers(app):
-    """Register semua handler auth ke PTB app."""
-    pass  # sudah dihandle di main.py via ConversationHandler
 
 
 async def cmd_setup(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -120,7 +122,9 @@ async def _finish_setup(update: Update, uid: int, client: TelegramClient):
     from main import start_user_client
 
     string_session = client.session.save()
-    await db.save_session(string_session)
+
+    # Simpan session pakai _db yang sudah di-init dari main.py
+    await _db.save_session(string_session)
     await client.disconnect()
     temp_store.pop(uid, None)
 

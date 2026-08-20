@@ -9,6 +9,7 @@ from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, Con
 from config import config
 from database import Database
 from ai_handler import AIHandler
+import auth
 from auth import (
     cmd_setup, cmd_cancel, setup_phone, setup_code, setup_password,
     PHONE_STEP, CODE_STEP, PASSWORD_STEP
@@ -17,7 +18,7 @@ from auth import (
 WIB = timezone(timedelta(hours=7))
 
 db = Database()
-ai: AIHandler = None  # di-init setelah db.init() di main()
+ai: AIHandler = None  # di-init setelah db.init()
 
 last_active: float = time.time()
 pending: set = set()
@@ -57,6 +58,9 @@ async def start_user_client():
     if not session_str:
         print("⚠️  Belum ada session. Kirim /setup ke bot untuk login.")
         return
+    # Disconnect dulu kalau sudah ada client lama
+    if user_client and user_client.is_connected():
+        await user_client.disconnect()
     user_client = TelegramClient(StringSession(session_str), config.API_ID, config.API_HASH)
     await user_client.connect()
     if not await user_client.is_user_authorized():
@@ -251,7 +255,8 @@ async def main():
     await db.init()
     print("✅ Database siap.")
 
-    # ── Init AIHandler setelah db.init() agar pool sudah tersedia
+    # ── Inject db ke auth.py & ai_handler agar semua pakai pool yang sama
+    auth.set_db(db)
     ai = AIHandler(db)
     print("✅ AI Handler siap.")
 
