@@ -1,13 +1,13 @@
 import google.generativeai as genai
 from config import config
-from database import Database
+
+genai.configure(api_key=config.GEMINI_API_KEY)
 
 
 class AIHandler:
-    def __init__(self):
-        genai.configure(api_key=config.GEMINI_API_KEY)
-        self.model = genai.GenerativeModel(config.GEMINI_MODEL)
-        self._db = Database()
+    def __init__(self, db):
+        # Terima db instance dari main agar pakai pool yang sudah di-init
+        self._db = db
 
     async def generate_reply(
         self,
@@ -17,25 +17,30 @@ class AIHandler:
         new_message: str
     ) -> str | None:
         try:
-            # Cek apakah ada persona khusus untuk sender ini
             user_persona = await self._db.get_user_persona(sender_id)
             global_persona = await self._db.get_persona()
 
             if user_persona:
-                # Pakai persona khusus untuk user ini
                 system_prompt = (
                     f"{user_persona}\n\n"
                     f"Kamu sedang membalas pesan dari {sender_name}. "
                     f"Balas dengan natural, tidak terlihat seperti bot."
                 )
+                temperature = 0.8
             else:
-                # Pakai persona global (default)
                 system_prompt = (
                     f"{global_persona}\n\n"
                     f"Kamu sedang membalas pesan dari seseorang bernama {sender_name}. "
                     f"Balas dengan singkat, natural, dan tidak terlihat seperti bot. "
                     f"Jangan gunakan emoji berlebihan. Maksimal 3 kalimat."
                 )
+                temperature = 0.7
+
+            # system_instruction harus dipass ke GenerativeModel, bukan GenerationConfig
+            model = genai.GenerativeModel(
+                model_name=config.GEMINI_MODEL,
+                system_instruction=system_prompt
+            )
 
             contents = []
             for msg in history:
@@ -43,12 +48,11 @@ class AIHandler:
                 contents.append({"role": role, "parts": [msg["content"]]})
             contents.append({"role": "user", "parts": [new_message]})
 
-            response = self.model.generate_content(
+            response = model.generate_content(
                 contents,
                 generation_config=genai.GenerationConfig(
-                    system_instruction=system_prompt,
                     max_output_tokens=200,
-                    temperature=0.8 if user_persona else 0.7,
+                    temperature=temperature,
                 )
             )
 
