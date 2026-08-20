@@ -18,12 +18,13 @@ from auth import (
 WIB = timezone(timedelta(hours=7))
 
 db = Database()
-ai: AIHandler = None  # di-init setelah db.init()
+ai: AIHandler = None
 
 last_active: float = time.time()
 pending: set = set()
 user_client: TelegramClient = None
 bot_instance: Bot = None
+my_id: int = None  # cache user ID sekali saat startup
 
 
 async def send_log_to_channel(sender_id: int, sender_name: str, incoming: str, reply: str):
@@ -53,12 +54,11 @@ async def send_log_to_channel(sender_id: int, sender_name: str, incoming: str, r
 
 
 async def start_user_client():
-    global user_client
+    global user_client, my_id
     session_str = await db.get_session()
     if not session_str:
         print("⚠️  Belum ada session. Kirim /setup ke bot untuk login.")
         return
-    # Disconnect dulu kalau sudah ada client lama
     if user_client and user_client.is_connected():
         await user_client.disconnect()
     user_client = TelegramClient(StringSession(session_str), config.API_ID, config.API_HASH)
@@ -68,7 +68,8 @@ async def start_user_client():
         user_client = None
         return
     me = await user_client.get_me()
-    print(f"✅ User client aktif sebagai: {me.first_name} (@{me.username})")
+    my_id = me.id  # cache sekali, tidak perlu get_me() setiap pesan
+    print(f"✅ User client aktif sebagai: {me.first_name} (@{me.username}) | ID: {my_id}")
     register_user_events()
     asyncio.ensure_future(user_client.run_until_disconnected())
 
@@ -130,17 +131,20 @@ def register_user_events():
         finally:
             pending.discard(sender_id)
 
-    @user_client.on(events.NewMessage(pattern=r"^/autoreply (on|off)$"))
+    # ── Commands via Saved Messages ───────────────────────────
+    # Semua command dicek dengan my_id (di-cache), bukan get_me() setiap kali
+
+    @user_client.on(events.NewMessage(outgoing=True, pattern=r"^/autoreply (on|off)$"))
     async def cmd_autoreply(event):
-        if event.chat_id != (await user_client.get_me()).id:
+        if event.chat_id != my_id:
             return
         status = event.pattern_match.group(1) == "on"
         await db.set_autoreply_status(status)
         await event.reply(f"✅ Auto-reply {'diaktifkan' if status else 'dinonaktifkan'}.")
 
-    @user_client.on(events.NewMessage(pattern=r"^/status$"))
+    @user_client.on(events.NewMessage(outgoing=True, pattern=r"^/status$"))
     async def cmd_status(event):
-        if event.chat_id != (await user_client.get_me()).id:
+        if event.chat_id != my_id:
             return
         is_active = await db.get_autoreply_status()
         idle = int(time.time() - last_active)
@@ -153,17 +157,17 @@ def register_user_events():
             f"• Log channel: `{log_ch}`"
         )
 
-    @user_client.on(events.NewMessage(pattern=r"^/setpersona (.+)$"))
+    @user_client.on(events.NewMessage(outgoing=True, pattern=r"^/setpersona (.+)$"))
     async def cmd_setpersona(event):
-        if event.chat_id != (await user_client.get_me()).id:
+        if event.chat_id != my_id:
             return
         persona = event.pattern_match.group(1)
         await db.set_persona(persona)
         await event.reply(f"✅ Persona global diubah:\n{persona}")
 
-    @user_client.on(events.NewMessage(pattern=r"^/setuserpersona (\d+) (.+)$"))
+    @user_client.on(events.NewMessage(outgoing=True, pattern=r"^/setuserpersona (\d+) (.+)$"))
     async def cmd_setuserpersona(event):
-        if event.chat_id != (await user_client.get_me()).id:
+        if event.chat_id != my_id:
             return
         sender_id = int(event.pattern_match.group(1))
         persona = event.pattern_match.group(2)
@@ -177,9 +181,9 @@ def register_user_events():
             f"💚 **Persona khusus disimpan untuk {name}** (`{sender_id}`):\n\n{persona}"
         )
 
-    @user_client.on(events.NewMessage(pattern=r"^/deluserpersona (\d+)$"))
+    @user_client.on(events.NewMessage(outgoing=True, pattern=r"^/deluserpersona (\d+)$"))
     async def cmd_deluserpersona(event):
-        if event.chat_id != (await user_client.get_me()).id:
+        if event.chat_id != my_id:
             return
         sender_id = int(event.pattern_match.group(1))
         deleted = await db.delete_user_persona(sender_id)
@@ -188,9 +192,9 @@ def register_user_events():
         else:
             await event.reply(f"❌ Tidak ada persona khusus untuk `{sender_id}`.")
 
-    @user_client.on(events.NewMessage(pattern=r"^/listpersona$"))
+    @user_client.on(events.NewMessage(outgoing=True, pattern=r"^/listpersona$"))
     async def cmd_listpersona(event):
-        if event.chat_id != (await user_client.get_me()).id:
+        if event.chat_id != my_id:
             return
         personas = await db.list_user_personas()
         if not personas:
@@ -202,17 +206,17 @@ def register_user_events():
             text += f"📝 {p['persona'][:100]}{'...' if len(p['persona']) > 100 else ''}\n\n"
         await event.reply(text)
 
-    @user_client.on(events.NewMessage(pattern=r"^/clearhistory (\d+)$"))
+    @user_client.on(events.NewMessage(outgoing=True, pattern=r"^/clearhistory (\d+)$"))
     async def cmd_clear(event):
-        if event.chat_id != (await user_client.get_me()).id:
+        if event.chat_id != my_id:
             return
         user_id = int(event.pattern_match.group(1))
         await db.clear_history(user_id)
         await event.reply(f"🗑️ Riwayat percakapan dengan `{user_id}` dihapus.")
 
-    @user_client.on(events.NewMessage(pattern=r"^/logs$"))
+    @user_client.on(events.NewMessage(outgoing=True, pattern=r"^/logs$"))
     async def cmd_logs(event):
-        if event.chat_id != (await user_client.get_me()).id:
+        if event.chat_id != my_id:
             return
         logs = await db.get_logs(limit=10)
         if not logs:
@@ -226,9 +230,9 @@ def register_user_events():
             text += f"🕐 {log['created_at']}\n\n"
         await event.reply(text)
 
-    @user_client.on(events.NewMessage(pattern=r"^/help$"))
+    @user_client.on(events.NewMessage(outgoing=True, pattern=r"^/help$"))
     async def cmd_help(event):
-        if event.chat_id != (await user_client.get_me()).id:
+        if event.chat_id != my_id:
             return
         await event.reply(
             "🤖 **TelegramAI AutoReply — Commands**\n\n"
@@ -255,14 +259,16 @@ async def main():
     await db.init()
     print("✅ Database siap.")
 
-    # ── Inject db ke auth.py & ai_handler agar semua pakai pool yang sama
     auth.set_db(db)
     ai = AIHandler(db)
     print("✅ AI Handler siap.")
 
-    # ── Build PTB app
     app = ApplicationBuilder().token(config.BOT_TOKEN).build()
     bot_instance = app.bot
+
+    # ── Hapus webhook lama agar tidak Conflict dengan instance sebelumnya
+    await bot_instance.delete_webhook(drop_pending_updates=True)
+    print("✅ Webhook dihapus, siap polling.")
 
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler("setup", cmd_setup)],
@@ -275,16 +281,13 @@ async def main():
     )
     app.add_handler(conv_handler)
 
-    # ── Jalankan PTB secara manual (non-blocking) agar tidak konflik event loop dengan Telethon
     await app.initialize()
     await app.start()
     await app.updater.start_polling(drop_pending_updates=True)
     print("🤖 Bot PTB berjalan. Kirim /setup ke bot untuk login.")
 
-    # ── Jalankan Telethon user client di event loop yang sama
     await start_user_client()
 
-    # ── Jaga program tetap berjalan
     try:
         await asyncio.Event().wait()
     finally:
