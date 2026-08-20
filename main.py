@@ -17,7 +17,7 @@ from auth import (
 WIB = timezone(timedelta(hours=7))
 
 db = Database()
-ai = AIHandler()
+ai: AIHandler = None  # di-init setelah db.init() di main()
 
 last_active: float = time.time()
 pending: set = set()
@@ -246,10 +246,14 @@ def register_user_events():
 
 
 async def main():
-    global bot_instance
+    global bot_instance, ai
 
     await db.init()
     print("✅ Database siap.")
+
+    # ── Init AIHandler setelah db.init() agar pool sudah tersedia
+    ai = AIHandler(db)
+    print("✅ AI Handler siap.")
 
     # ── Build PTB app
     app = ApplicationBuilder().token(config.BOT_TOKEN).build()
