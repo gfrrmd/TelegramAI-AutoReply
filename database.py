@@ -31,6 +31,14 @@ class Database:
                     reply TEXT,
                     created_at TIMESTAMP DEFAULT NOW()
                 );
+
+                CREATE TABLE IF NOT EXISTS user_personas (
+                    sender_id BIGINT PRIMARY KEY,
+                    sender_name TEXT,
+                    persona TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT NOW(),
+                    updated_at TIMESTAMP DEFAULT NOW()
+                );
             """)
         await self._set_default("autoreply_status", "true")
         await self._set_default("persona", "Kamu adalah asisten pribadi yang ramah, sopan, dan membalas pesan dengan singkat dan natural seperti orang Indonesia pada umumnya.")
@@ -68,7 +76,7 @@ class Database:
                 ON CONFLICT (key) DO UPDATE SET value = $1;
             """, str(status).lower())
 
-    # ── Persona ────────────────────────────────────────────────────────────
+    # ── Global Persona ──────────────────────────────────────────────────────
     async def get_persona(self) -> str:
         async with self.pool.acquire() as conn:
             row = await conn.fetchrow("SELECT value FROM settings WHERE key = 'persona'")
@@ -80,6 +88,37 @@ class Database:
                 INSERT INTO settings (key, value) VALUES ('persona', $1)
                 ON CONFLICT (key) DO UPDATE SET value = $1;
             """, persona)
+
+    # ── Per-user Persona ────────────────────────────────────────────────────
+    async def set_user_persona(self, sender_id: int, sender_name: str, persona: str):
+        async with self.pool.acquire() as conn:
+            await conn.execute("""
+                INSERT INTO user_personas (sender_id, sender_name, persona, updated_at)
+                VALUES ($1, $2, $3, NOW())
+                ON CONFLICT (sender_id) DO UPDATE SET persona = $3, sender_name = $2, updated_at = NOW();
+            """, sender_id, sender_name, persona)
+
+    async def get_user_persona(self, sender_id: int) -> str | None:
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT persona FROM user_personas WHERE sender_id = $1", sender_id
+            )
+            return row["persona"] if row else None
+
+    async def delete_user_persona(self, sender_id: int) -> bool:
+        async with self.pool.acquire() as conn:
+            result = await conn.execute(
+                "DELETE FROM user_personas WHERE sender_id = $1", sender_id
+            )
+            return result == "DELETE 1"
+
+    async def list_user_personas(self) -> list:
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT sender_id, sender_name, persona, updated_at
+                FROM user_personas ORDER BY updated_at DESC;
+            """)
+            return [dict(r) for r in rows]
 
     # ── Chat history ───────────────────────────────────────────────────────
     async def save_message(self, sender_id: int, role: str, content: str):
