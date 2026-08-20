@@ -32,8 +32,6 @@ class Database:
                     created_at TIMESTAMP DEFAULT NOW()
                 );
             """)
-
-        # Set default settings
         await self._set_default("autoreply_status", "true")
         await self._set_default("persona", "Kamu adalah asisten pribadi yang ramah, sopan, dan membalas pesan dengan singkat dan natural seperti orang Indonesia pada umumnya.")
 
@@ -44,7 +42,20 @@ class Database:
                 ON CONFLICT (key) DO NOTHING;
             """, key, value)
 
-    # ── Auto-reply status ──────────────────────────────────────────────
+    # ── Session ────────────────────────────────────────────────────────────
+    async def save_session(self, session_str: str):
+        async with self.pool.acquire() as conn:
+            await conn.execute("""
+                INSERT INTO settings (key, value) VALUES ('string_session', $1)
+                ON CONFLICT (key) DO UPDATE SET value = $1;
+            """, session_str)
+
+    async def get_session(self) -> str | None:
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow("SELECT value FROM settings WHERE key = 'string_session'")
+            return row["value"] if row else None
+
+    # ── Auto-reply status ──────────────────────────────────────────────────
     async def get_autoreply_status(self) -> bool:
         async with self.pool.acquire() as conn:
             row = await conn.fetchrow("SELECT value FROM settings WHERE key = 'autoreply_status'")
@@ -57,7 +68,7 @@ class Database:
                 ON CONFLICT (key) DO UPDATE SET value = $1;
             """, str(status).lower())
 
-    # ── Persona ────────────────────────────────────────────────────────
+    # ── Persona ────────────────────────────────────────────────────────────
     async def get_persona(self) -> str:
         async with self.pool.acquire() as conn:
             row = await conn.fetchrow("SELECT value FROM settings WHERE key = 'persona'")
@@ -70,7 +81,7 @@ class Database:
                 ON CONFLICT (key) DO UPDATE SET value = $1;
             """, persona)
 
-    # ── Chat history ───────────────────────────────────────────────────
+    # ── Chat history ───────────────────────────────────────────────────────
     async def save_message(self, sender_id: int, role: str, content: str):
         async with self.pool.acquire() as conn:
             await conn.execute("""
@@ -91,7 +102,7 @@ class Database:
         async with self.pool.acquire() as conn:
             await conn.execute("DELETE FROM chat_history WHERE sender_id = $1;", sender_id)
 
-    # ── Logs ───────────────────────────────────────────────────────────
+    # ── Logs ───────────────────────────────────────────────────────────────
     async def log_autoreply(self, sender_id: int, sender_name: str, incoming: str, reply: str):
         async with self.pool.acquire() as conn:
             await conn.execute("""

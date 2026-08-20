@@ -5,10 +5,15 @@ load_dotenv()
 
 
 class Config:
-    # Telegram
+    # Telegram API (dari my.telegram.org)
     API_ID: int = int(os.getenv("API_ID", "0"))
     API_HASH: str = os.getenv("API_HASH", "")
-    PHONE_NUMBER: str = os.getenv("PHONE_NUMBER", "")
+
+    # Bot Token (dari @BotFather)
+    BOT_TOKEN: str = os.getenv("BOT_TOKEN", "")
+
+    # Owner ID (Telegram user ID kamu, agar /setup hanya bisa diakses kamu)
+    OWNER_ID: int = int(os.getenv("OWNER_ID", "0"))
 
     # Google Gemini
     GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
@@ -18,11 +23,11 @@ class Config:
     DATABASE_URL: str = os.getenv("DATABASE_URL", "")
 
     # Auto-reply settings
-    IDLE_TIMEOUT: int = int(os.getenv("IDLE_TIMEOUT", "300"))  # detik (default 5 menit)
-    REPLY_DELAY: int = int(os.getenv("REPLY_DELAY", "3"))       # detik sebelum balas (biar natural)
-    HISTORY_LIMIT: int = int(os.getenv("HISTORY_LIMIT", "10")) # jumlah pesan riwayat
+    IDLE_TIMEOUT: int = int(os.getenv("IDLE_TIMEOUT", "300"))
+    REPLY_DELAY: int = int(os.getenv("REPLY_DELAY", "3"))
+    HISTORY_LIMIT: int = int(os.getenv("HISTORY_LIMIT", "10"))
 
-    # Whitelist/Blacklist (pisahkan dengan koma, contoh: "123456,789012")
+    # Whitelist/Blacklist
     WHITELIST_ENABLED: bool = os.getenv("WHITELIST_ENABLED", "false").lower() == "true"
     WHITELIST_IDS: list = os.getenv("WHITELIST_IDS", "").split(",") if os.getenv("WHITELIST_IDS") else []
     BLACKLIST_IDS: list = os.getenv("BLACKLIST_IDS", "").split(",") if os.getenv("BLACKLIST_IDS") else []
