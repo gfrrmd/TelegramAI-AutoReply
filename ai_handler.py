@@ -13,18 +13,26 @@ DEFAULT_PERSONA = (
 
 
 def _clean(text: str) -> str:
-    # Hapus zero-width & invisible unicode
+    """Bersihkan karakter aneh dan markdown."""
     text = re.sub(r'[\u200b-\u200f\u202a-\u202e\u2060\ufeff\u00ad]', '', text)
-    # Hapus markdown
     text = re.sub(r'[*_`~]', '', text)
-    # Smart quotes
     text = text.replace('\u201c', '"').replace('\u201d', '"')
     text = text.replace('\u2018', "'").replace('\u2019', "'")
-    # Dash
     text = text.replace('\u2014', '-').replace('\u2013', '-')
-    # Spasi & baris berlebih
     text = re.sub(r' +', ' ', text)
     text = re.sub(r'\n{3,}', '\n\n', text)
+    return text.strip()
+
+
+def _trim_to_sentence(text: str) -> str:
+    """Potong teks sampai tanda baca penutup kalimat terakhir (. ! ?)."""
+    # Cari posisi tanda baca penutup kalimat terakhir
+    match = re.search(r'[.!?][^.!?]*$', text)
+    if match:
+        # Ambil sampai tanda baca itu (inklusif)
+        end = match.start() + 1
+        return text[:end].strip()
+    # Kalau tidak ada tanda baca sama sekali, kembalikan apa adanya
     return text.strip()
 
 
@@ -45,15 +53,15 @@ class AIHandler:
             user_persona = await self._db.get_user_persona(sender_id)
             global_persona = await self._db.get_persona()
 
-            # Kalau global_persona kosong/default, pakai DEFAULT_PERSONA
             persona_text = user_persona or global_persona or DEFAULT_PERSONA
 
             base_rules = (
                 "ATURAN WAJIB:\n"
-                "- Balas HANYA 1-2 kalimat singkat, jangan panjang.\n"
-                "- Pastikan kalimat SELALU selesai, jangan terpotong di tengah.\n"
-                "- Gunakan bahasa Indonesia informal/santai (seperti chat biasa).\n"
-                "- Jangan pakai markdown, bullet, simbol *, _, `, ~.\n"
+                "- Balas maksimal 2-3 kalimat, tidak lebih.\n"
+                "- Setiap kalimat HARUS diakhiri tanda titik (.), tanda seru (!), atau tanda tanya (?).\n"
+                "- Jangan pernah memotong kalimat di tengah, selalu selesaikan kalimatnya.\n"
+                "- Gunakan bahasa Indonesia informal/santai seperti chat biasa.\n"
+                "- Jangan pakai markdown, bullet, atau simbol *, _, `, ~.\n"
                 "- Jangan pakai emoji berlebihan.\n"
                 "- Jangan pernah mengaku sebagai AI atau bot."
             )
@@ -84,7 +92,7 @@ class AIHandler:
             response = model.generate_content(
                 contents,
                 generation_config=genai.GenerationConfig(
-                    max_output_tokens=80,   # cukup untuk 1-2 kalimat, tidak terpotong
+                    max_output_tokens=150,
                     temperature=temperature,
                 )
             )
@@ -94,9 +102,10 @@ class AIHandler:
                 print("[AIHandler] Gemini tidak menghasilkan teks")
                 return None
 
-            result = _clean(raw)
-            print(f"[AIHandler] Balasan: {result[:80]}")
-            return result
+            # Bersihkan lalu pastikan selalu selesai di tanda baca
+            result = _trim_to_sentence(_clean(raw))
+            print(f"[AIHandler] Balasan: {result[:100]}")
+            return result if result else None
 
         except Exception as e:
             print(f"[AIHandler] ERROR: {e}")
