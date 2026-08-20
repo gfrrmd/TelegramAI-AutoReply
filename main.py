@@ -20,14 +20,13 @@ WIB = timezone(timedelta(hours=7))
 # ── Globals ─────────────────────────────────────────
 db = Database()
 ai: AIHandler = None
-bot_client: TelegramClient = None   # bot token  → handle /setup
-user_client: TelegramClient = None  # userbot    → auto-reply + commands
-my_id: int = None                   # di-cache saat user_client login
-last_active: float = time.time()
+bot_client: TelegramClient = None
+user_client: TelegramClient = None
+my_id: int = None
+last_active: float = 0  # 0 = belum ada aktivitas, langsung bisa auto-reply
 pending: set = set()
-
-# state mesin /setup per user
 _setup_state: dict = {}
+_bot_replying: bool = False  # flag agar reply bot tidak reset last_active
 
 
 # ── Helper ────────────────────────────────────────
@@ -81,11 +80,14 @@ def _register_userbot_events():
 
     @user_client.on(events.NewMessage(outgoing=True))
     async def _track_active(event):
-        global last_active
-        last_active = time.time()
+        global last_active, _bot_replying
+        # Hanya reset timer kalau bukan reply otomatis dari bot
+        if not _bot_replying:
+            last_active = time.time()
 
     @user_client.on(events.NewMessage(incoming=True))
     async def _auto_reply(event):
+        global _bot_replying
         if not event.is_private:
             return
         sender = await event.get_sender()
@@ -94,19 +96,28 @@ def _register_userbot_events():
 
         sid = sender.id
         sname = sender.first_name or "Someone"
+        idle = time.time() - last_active
+
+        print(f"[AutoReply] Pesan dari {sname}({sid}), idle={idle:.0f}s, timeout={config.IDLE_TIMEOUT}s")
 
         if config.WHITELIST_ENABLED and str(sid) not in config.WHITELIST_IDS:
+            print(f"[AutoReply] Skip: {sid} tidak di whitelist")
             return
         if str(sid) in config.BLACKLIST_IDS:
+            print(f"[AutoReply] Skip: {sid} di blacklist")
             return
         if not await db.get_autoreply_status():
+            print(f"[AutoReply] Skip: auto-reply nonaktif")
             return
-        if (time.time() - last_active) < config.IDLE_TIMEOUT:
+        if idle < config.IDLE_TIMEOUT:
+            print(f"[AutoReply] Skip: idle {idle:.0f}s < timeout {config.IDLE_TIMEOUT}s")
             return
         if sid in pending:
+            print(f"[AutoReply] Skip: {sid} masih pending")
             return
 
         pending.add(sid)
+        _bot_replying = True
         try:
             await db.save_message(sid, "user", event.raw_text)
             history = await db.get_history(sid, limit=config.HISTORY_LIMIT)
@@ -120,10 +131,14 @@ def _register_userbot_events():
                 await db.save_message(sid, "assistant", reply)
                 await db.log_autoreply(sid, sname, event.raw_text, reply)
                 await _send_log(sid, sname, event.raw_text, reply)
+                print(f"[AutoReply] Berhasil balas ke {sname}: {reply[:60]}")
+            else:
+                print(f"[AutoReply] AI tidak menghasilkan reply")
         finally:
             pending.discard(sid)
+            _bot_replying = False
 
-    # ── Commands di Saved Messages (outgoing) ─────────────
+    # ── Commands di Saved Messages ───────────────────────────
 
     @user_client.on(events.NewMessage(outgoing=True, pattern=r"^/autoreply (on|off)$"))
     async def _cmd_autoreply(event):
@@ -152,7 +167,7 @@ def _register_userbot_events():
             return
         p = event.pattern_match.group(1)
         await db.set_persona(p)
-        await event.reply(f"✅ Persona global diubah.")
+        await event.reply("✅ Persona global diubah.")
 
     @user_client.on(events.NewMessage(outgoing=True, pattern=r"^/setuserpersona (\d+) (.+)$"))
     async def _cmd_setuserpersona(event):
@@ -372,7 +387,6 @@ async def main():
 
     print("🚀 Semua siap! Kirim /setup ke bot untuk login pertama kali.")
 
-    # Jalankan keduanya; kalau user_client None, hanya bot_client yang jalan
     tasks = [bot_client.run_until_disconnected()]
     if user_client is not None:
         tasks.append(user_client.run_until_disconnected())
