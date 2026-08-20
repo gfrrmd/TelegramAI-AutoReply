@@ -12,8 +12,12 @@ class Config:
     # Bot Token (dari @BotFather)
     BOT_TOKEN: str = os.getenv("BOT_TOKEN", "")
 
-    # Owner ID (Telegram user ID kamu, agar /setup hanya bisa diakses kamu)
+    # Owner ID (Telegram user ID kamu)
     OWNER_ID: int = int(os.getenv("OWNER_ID", "0"))
+
+    # Log Channel (channel ID atau username, contoh: -1001234567890 atau @namalog)
+    # Kosongkan jika tidak ingin log ke channel
+    LOG_CHANNEL: str = os.getenv("LOG_CHANNEL", "")
 
     # Google Gemini
     GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")

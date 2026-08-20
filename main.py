@@ -1,8 +1,10 @@
 import asyncio
 import time
+from datetime import datetime, timezone, timedelta
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
-from telethon.tl.types import User, Chat, Channel
+from telethon.tl.types import User
+from telegram import Bot
 from config import config
 from database import Database
 from ai_handler import AIHandler
@@ -12,12 +14,44 @@ from auth import (
     PHONE_STEP, CODE_STEP, PASSWORD_STEP
 )
 
+WIB = timezone(timedelta(hours=7))
+
 db = Database()
 ai = AIHandler()
 
 last_active: float = time.time()
 pending: set = set()
 user_client: TelegramClient = None
+bot_instance: Bot = None  # PTB bot untuk kirim log ke channel
+
+
+async def send_log_to_channel(sender_id: int, sender_name: str, incoming: str, reply: str):
+    """Kirim notifikasi log ke channel Telegram."""
+    if not config.LOG_CHANNEL or not bot_instance:
+        return
+    try:
+        now = datetime.now(WIB).strftime("%d %b %Y, %H:%M WIB")
+        # Cek apakah ada persona khusus untuk user ini
+        user_persona = await db.get_user_persona(sender_id)
+        persona_label = "💚 Persona khusus" if user_persona else "🌏 Persona global"
+
+        text = (
+            f"🤖 **Auto-Reply Terkirim**\n"
+            f"────────────────────\n"
+            f"👤 **Dari:** {sender_name} (`{sender_id}`)\n"
+            f"🕐 **Waktu:** {now}\n"
+            f"{persona_label}\n"
+            f"────────────────────\n"
+            f"💬 **Pesan masuk:**\n{incoming}\n\n"
+            f"🤖 **Balasan AI:**\n{reply}"
+        )
+        await bot_instance.send_message(
+            chat_id=config.LOG_CHANNEL,
+            text=text,
+            parse_mode="Markdown"
+        )
+    except Exception as e:
+        print(f"[Log Channel] Gagal kirim log: {e}")
 
 
 async def start_user_client():
@@ -49,13 +83,10 @@ def register_user_events():
     async def on_incoming(event):
         global last_active
 
-        # ✅ Hanya private chat (bukan grup, channel, atau bot)
+        # ✅ Hanya private chat
         if not event.is_private:
             return
-
         sender = await event.get_sender()
-
-        # Pastikan pengirim adalah user biasa (bukan bot, grup, channel)
         if not isinstance(sender, User):
             return
         if sender.bot:
@@ -96,6 +127,8 @@ def register_user_events():
                 await event.reply(reply)
                 await db.save_message(sender_id, "assistant", reply)
                 await db.log_autoreply(sender_id, sender_name, event.raw_text, reply)
+                # 📬 Kirim log ke channel
+                await send_log_to_channel(sender_id, sender_name, event.raw_text, reply)
         finally:
             pending.discard(sender_id)
 
@@ -115,11 +148,13 @@ def register_user_events():
             return
         is_active = await db.get_autoreply_status()
         idle = int(time.time() - last_active)
+        log_ch = config.LOG_CHANNEL or "Tidak diaktifkan"
         await event.reply(
             f"📊 **Status Auto-Reply**\n"
             f"• Status: {'🟢 Aktif' if is_active else '🔴 Nonaktif'}\n"
             f"• Idle kamu: {idle} detik\n"
-            f"• Timeout: {config.IDLE_TIMEOUT} detik"
+            f"• Timeout: {config.IDLE_TIMEOUT} detik\n"
+            f"• Log channel: `{log_ch}`"
         )
 
     @user_client.on(events.NewMessage(pattern=r"^/setpersona (.+)$"))
@@ -132,12 +167,10 @@ def register_user_events():
 
     @user_client.on(events.NewMessage(pattern=r"^/setuserpersona (\d+) (.+)$"))
     async def cmd_setuserpersona(event):
-        """Set persona khusus untuk user tertentu. Format: /setuserpersona <user_id> <prompt>"""
         if event.chat_id != (await user_client.get_me()).id:
             return
         sender_id = int(event.pattern_match.group(1))
         persona = event.pattern_match.group(2)
-        # Ambil nama user kalau bisa
         try:
             target = await user_client.get_entity(sender_id)
             name = target.first_name or str(sender_id)
@@ -145,30 +178,27 @@ def register_user_events():
             name = str(sender_id)
         await db.set_user_persona(sender_id, name, persona)
         await event.reply(
-            f"💚 **Persona khusus disimpan untuk {name}** (`{sender_id}`):\n\n"
-            f"{persona}"
+            f"💚 **Persona khusus disimpan untuk {name}** (`{sender_id}`):\n\n{persona}"
         )
 
     @user_client.on(events.NewMessage(pattern=r"^/deluserpersona (\d+)$"))
     async def cmd_deluserpersona(event):
-        """Hapus persona khusus untuk user tertentu."""
         if event.chat_id != (await user_client.get_me()).id:
             return
         sender_id = int(event.pattern_match.group(1))
         deleted = await db.delete_user_persona(sender_id)
         if deleted:
-            await event.reply(f"✅ Persona khusus untuk `{sender_id}` dihapus. Kembali ke persona global.")
+            await event.reply(f"✅ Persona khusus untuk `{sender_id}` dihapus.")
         else:
             await event.reply(f"❌ Tidak ada persona khusus untuk `{sender_id}`.")
 
     @user_client.on(events.NewMessage(pattern=r"^/listpersona$"))
     async def cmd_listpersona(event):
-        """Lihat semua persona khusus yang sudah di-set."""
         if event.chat_id != (await user_client.get_me()).id:
             return
         personas = await db.list_user_personas()
         if not personas:
-            await event.reply("📭 Belum ada persona khusus. Gunakan /setuserpersona <user_id> <prompt>")
+            await event.reply("📭 Belum ada persona khusus.")
             return
         text = "💚 **Daftar Persona Khusus:**\n\n"
         for p in personas:
@@ -209,7 +239,7 @@ def register_user_events():
             "🔧 **Auto-Reply**\n"
             "`/autoreply on` — Aktifkan\n"
             "`/autoreply off` — Nonaktifkan\n"
-            "`/status` — Cek status & idle time\n\n"
+            "`/status` — Cek status, idle time & log channel\n\n"
             "🧠 **Persona Global**\n"
             "`/setpersona <teks>` — Ubah persona default AI\n\n"
             "💚 **Persona Khusus per Orang**\n"
@@ -218,17 +248,20 @@ def register_user_events():
             "`/listpersona` — Lihat semua prompt khusus\n\n"
             "🗄️ **Riwayat & Log**\n"
             "`/clearhistory <user_id>` — Hapus riwayat chat\n"
-            "`/logs` — Lihat 10 log terakhir\n\n"
+            "`/logs` — Lihat 10 log terakhir (Saved Messages)\n\n"
             "💡 Kirim command ini ke **Saved Messages** kamu."
         )
 
 
 async def main():
+    global bot_instance
     await db.init()
     print("✅ Database siap.")
     await start_user_client()
 
     app = ApplicationBuilder().token(config.BOT_TOKEN).build()
+    bot_instance = app.bot  # simpan referensi bot untuk kirim log
+
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler("setup", cmd_setup)],
         states={
