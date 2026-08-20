@@ -1,0 +1,17 @@
+# Environment
+.env
+
+# Telethon session
+session/
+*.session
+*.session-journal
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# OS
+.DS_Store
