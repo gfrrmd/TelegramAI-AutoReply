@@ -4,21 +4,26 @@ from config import config
 
 genai.configure(api_key=config.GEMINI_API_KEY)
 
+DEFAULT_PERSONA = (
+    "Kamu adalah asisten pribadi Rama. "
+    "Tugasmu membalas pesan yang masuk ke HP Rama saat dia sedang sibuk atau tidak bisa membalas. "
+    "Kamu mewakili Rama, jadi balas seolah-olah kamu adalah Rama sendiri (pakai kata 'aku'). "
+    "Jangan pernah bilang kamu adalah AI atau bot."
+)
+
 
 def _clean(text: str) -> str:
-    """Bersihkan karakter aneh, markdown, dan zero-width chars dari response AI."""
-    # Hapus zero-width & invisible unicode chars
+    # Hapus zero-width & invisible unicode
     text = re.sub(r'[\u200b-\u200f\u202a-\u202e\u2060\ufeff\u00ad]', '', text)
-    # Hapus markdown bold/italic/code
+    # Hapus markdown
     text = re.sub(r'[*_`~]', '', text)
-    # Ganti smart quotes dengan quote biasa
+    # Smart quotes
     text = text.replace('\u201c', '"').replace('\u201d', '"')
     text = text.replace('\u2018', "'").replace('\u2019', "'")
-    # Ganti em dash & en dash dengan strip biasa
+    # Dash
     text = text.replace('\u2014', '-').replace('\u2013', '-')
-    # Hapus spasi berlebih
+    # Spasi & baris berlebih
     text = re.sub(r' +', ' ', text)
-    # Hapus baris kosong berlebih
     text = re.sub(r'\n{3,}', '\n\n', text)
     return text.strip()
 
@@ -40,31 +45,30 @@ class AIHandler:
             user_persona = await self._db.get_user_persona(sender_id)
             global_persona = await self._db.get_persona()
 
+            # Kalau global_persona kosong/default, pakai DEFAULT_PERSONA
+            persona_text = user_persona or global_persona or DEFAULT_PERSONA
+
             base_rules = (
-                "PENTING: Balas HANYA dengan teks biasa. "
-                "Jangan gunakan markdown, bold, italic, bullet, atau simbol apapun. "
-                "Jangan gunakan tanda bintang (*), underscore (_), backtick (`), atau tilde (~). "
-                "Tulis seperti orang chat biasa di WhatsApp."
+                "ATURAN WAJIB:\n"
+                "- Balas HANYA 1-2 kalimat singkat, jangan panjang.\n"
+                "- Pastikan kalimat SELALU selesai, jangan terpotong di tengah.\n"
+                "- Gunakan bahasa Indonesia informal/santai (seperti chat biasa).\n"
+                "- Jangan pakai markdown, bullet, simbol *, _, `, ~.\n"
+                "- Jangan pakai emoji berlebihan.\n"
+                "- Jangan pernah mengaku sebagai AI atau bot."
             )
 
+            system_prompt = (
+                f"{persona_text}\n\n"
+                f"Kamu sedang membalas pesan dari {sender_name}.\n\n"
+                f"{base_rules}"
+            )
+
+            temperature = 0.8 if user_persona else 0.7
             if user_persona:
-                system_prompt = (
-                    f"{user_persona}\n\n"
-                    f"Kamu sedang membalas pesan dari {sender_name}. "
-                    f"Balas dengan natural, tidak terlihat seperti bot.\n\n"
-                    f"{base_rules}"
-                )
-                temperature = 0.8
                 print(f"[AIHandler] Pakai persona khusus untuk {sender_name}")
             else:
-                system_prompt = (
-                    f"{global_persona}\n\n"
-                    f"Kamu sedang membalas pesan dari {sender_name}. "
-                    f"Balas singkat, natural, maksimal 2-3 kalimat pendek.\n\n"
-                    f"{base_rules}"
-                )
-                temperature = 0.7
-                print(f"[AIHandler] Pakai persona global")
+                print(f"[AIHandler] Pakai persona {'global' if global_persona else 'default'}")
 
             model = genai.GenerativeModel(
                 model_name=config.GEMINI_MODEL,
@@ -80,14 +84,14 @@ class AIHandler:
             response = model.generate_content(
                 contents,
                 generation_config=genai.GenerationConfig(
-                    max_output_tokens=200,
+                    max_output_tokens=80,   # cukup untuk 1-2 kalimat, tidak terpotong
                     temperature=temperature,
                 )
             )
 
             raw = response.text.strip() if response.text else None
             if not raw:
-                print(f"[AIHandler] Gemini tidak menghasilkan teks")
+                print("[AIHandler] Gemini tidak menghasilkan teks")
                 return None
 
             result = _clean(raw)
