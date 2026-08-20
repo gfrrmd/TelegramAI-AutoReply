@@ -5,10 +5,10 @@ from telethon import TelegramClient, events
 from telethon.sessions import StringSession
 from telethon.tl.types import User
 from telegram import Bot
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ConversationHandler, filters
 from config import config
 from database import Database
 from ai_handler import AIHandler
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ConversationHandler, filters
 from auth import (
     cmd_setup, cmd_cancel, setup_phone, setup_code, setup_password,
     PHONE_STEP, CODE_STEP, PASSWORD_STEP
@@ -22,19 +22,16 @@ ai = AIHandler()
 last_active: float = time.time()
 pending: set = set()
 user_client: TelegramClient = None
-bot_instance: Bot = None  # PTB bot untuk kirim log ke channel
+bot_instance: Bot = None
 
 
 async def send_log_to_channel(sender_id: int, sender_name: str, incoming: str, reply: str):
-    """Kirim notifikasi log ke channel Telegram."""
     if not config.LOG_CHANNEL or not bot_instance:
         return
     try:
         now = datetime.now(WIB).strftime("%d %b %Y, %H:%M WIB")
-        # Cek apakah ada persona khusus untuk user ini
         user_persona = await db.get_user_persona(sender_id)
         persona_label = "💚 Persona khusus" if user_persona else "🌏 Persona global"
-
         text = (
             f"🤖 **Auto-Reply Terkirim**\n"
             f"────────────────────\n"
@@ -82,8 +79,6 @@ def register_user_events():
     @user_client.on(events.NewMessage(incoming=True))
     async def on_incoming(event):
         global last_active
-
-        # ✅ Hanya private chat
         if not event.is_private:
             return
         sender = await event.get_sender()
@@ -127,12 +122,9 @@ def register_user_events():
                 await event.reply(reply)
                 await db.save_message(sender_id, "assistant", reply)
                 await db.log_autoreply(sender_id, sender_name, event.raw_text, reply)
-                # 📬 Kirim log ke channel
                 await send_log_to_channel(sender_id, sender_name, event.raw_text, reply)
         finally:
             pending.discard(sender_id)
-
-    # ── Commands via Saved Messages ─────────────────────────────────────────
 
     @user_client.on(events.NewMessage(pattern=r"^/autoreply (on|off)$"))
     async def cmd_autoreply(event):
@@ -248,19 +240,20 @@ def register_user_events():
             "`/listpersona` — Lihat semua prompt khusus\n\n"
             "🗄️ **Riwayat & Log**\n"
             "`/clearhistory <user_id>` — Hapus riwayat chat\n"
-            "`/logs` — Lihat 10 log terakhir (Saved Messages)\n\n"
+            "`/logs` — Lihat 10 log terakhir\n\n"
             "💡 Kirim command ini ke **Saved Messages** kamu."
         )
 
 
 async def main():
     global bot_instance
+
     await db.init()
     print("✅ Database siap.")
-    await start_user_client()
 
+    # ── Build PTB app
     app = ApplicationBuilder().token(config.BOT_TOKEN).build()
-    bot_instance = app.bot  # simpan referensi bot untuk kirim log
+    bot_instance = app.bot
 
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler("setup", cmd_setup)],
@@ -272,8 +265,23 @@ async def main():
         fallbacks=[CommandHandler("cancel", cmd_cancel)],
     )
     app.add_handler(conv_handler)
-    print("🤖 Bot berjalan. Kirim /setup ke bot untuk login.")
-    await app.run_polling()
+
+    # ── Jalankan PTB secara manual (non-blocking) agar tidak konflik event loop dengan Telethon
+    await app.initialize()
+    await app.start()
+    await app.updater.start_polling(drop_pending_updates=True)
+    print("🤖 Bot PTB berjalan. Kirim /setup ke bot untuk login.")
+
+    # ── Jalankan Telethon user client di event loop yang sama
+    await start_user_client()
+
+    # ── Jaga program tetap berjalan
+    try:
+        await asyncio.Event().wait()
+    finally:
+        await app.updater.stop()
+        await app.stop()
+        await app.shutdown()
 
 
 if __name__ == "__main__":
