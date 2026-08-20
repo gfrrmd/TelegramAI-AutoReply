@@ -6,8 +6,8 @@ genai.configure(api_key=config.GEMINI_API_KEY)
 
 class AIHandler:
     def __init__(self, db):
-        # Terima db instance dari main agar pakai pool yang sudah di-init
         self._db = db
+        print(f"[AIHandler] Init dengan model: {config.GEMINI_MODEL}")
 
     async def generate_reply(
         self,
@@ -16,6 +16,7 @@ class AIHandler:
         history: list,
         new_message: str
     ) -> str | None:
+        print(f"[AIHandler] Memproses pesan dari {sender_name} ({sender_id}): {new_message[:50]}")
         try:
             user_persona = await self._db.get_user_persona(sender_id)
             global_persona = await self._db.get_persona()
@@ -27,6 +28,7 @@ class AIHandler:
                     f"Balas dengan natural, tidak terlihat seperti bot."
                 )
                 temperature = 0.8
+                print(f"[AIHandler] Pakai persona khusus untuk {sender_name}")
             else:
                 system_prompt = (
                     f"{global_persona}\n\n"
@@ -35,8 +37,8 @@ class AIHandler:
                     f"Jangan gunakan emoji berlebihan. Maksimal 3 kalimat."
                 )
                 temperature = 0.7
+                print(f"[AIHandler] Pakai persona global")
 
-            # system_instruction harus dipass ke GenerativeModel, bukan GenerationConfig
             model = genai.GenerativeModel(
                 model_name=config.GEMINI_MODEL,
                 system_instruction=system_prompt
@@ -56,8 +58,13 @@ class AIHandler:
                 )
             )
 
-            return response.text.strip() if response.text else None
+            result = response.text.strip() if response.text else None
+            if result:
+                print(f"[AIHandler] Balasan berhasil dibuat: {result[:80]}")
+            else:
+                print(f"[AIHandler] Gemini tidak menghasilkan teks (response kosong)")
+            return result
 
         except Exception as e:
-            print(f"[AIHandler] Error: {e}")
+            print(f"[AIHandler] ERROR: {e}")
             return None
